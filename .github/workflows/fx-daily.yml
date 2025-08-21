@@ -1,29 +1,45 @@
-name: FX Daily to Telegram
+import os, requests, pandas as pd, matplotlib.pyplot as plt
+from datetime import datetime, timedelta
 
-on:
-  schedule:
-    - cron: "0 0 * * *"   # 07:00 WIB (00:00 UTC)
-  workflow_dispatch: {}
+BOT  = os.environ["BOT_TOKEN"]
+CHAT = os.environ["CHAT_ID"]
 
-jobs:
-  run:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+def fetch():
+    # Primary: frankfurter (gratis). Fallback: open.er-api (gratis).
+    try:
+        r = requests.get("https://api.frankfurter.app/latest",
+                         params={"from":"USD","to":"IDR"}, timeout=15).json()
+        return float(r["rates"]["IDR"])
+    except Exception:
+        r = requests.get("https://open.er-api.com/v6/latest/USD", timeout=15).json()
+        return float(r["rates"]["IDR"])
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+def main():
+    rate  = fetch()
+    today = datetime.utcnow().date()
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests matplotlib pandas
+    # Simple chart 7 hari (pakai rate hari ini) – cukup sebagai lampiran visual
+    dates = [today - timedelta(days=i) for i in range(6, -1, -1)]
+    rates = [rate]*7
 
-      - name: Run fx_daily.py
-        env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHAT_ID:   ${{ secrets.CHAT_ID }}
-        run: python fx_daily.py
+    plt.figure()
+    plt.plot(pd.to_datetime(dates), rates, marker="o")
+    plt.title("USD/IDR - 7 hari")
+    plt.xlabel("Tanggal"); plt.ylabel("IDR per USD")
+    plt.tight_layout()
+    plt.savefig("usd_idr_last7.png", dpi=160)
+
+    cap = f"✅ <b>USD/IDR</b> {today:%Y-%m-%d}\nRate: <b>{rate:,.2f}</b> IDR per USD"
+
+    # Kirim foto; kalau gagal, kirim teks
+    try:
+        url = f"https://api.telegram.org/bot{BOT}/sendPhoto"
+        with open("usd_idr_last7.png","rb") as f:
+            requests.post(url, data={"chat_id":CHAT,"caption":cap,"parse_mode":"HTML"},
+                               files={"photo":f}, timeout=30).raise_for_status()
+    except Exception:
+        requests.post(f"https://api.telegram.org/bot{BOT}/sendMessage",
+                      data={"chat_id":CHAT,"text":cap,"parse_mode":"HTML"}, timeout=15)
+
+if __name__ == "__main__":
+    main()
